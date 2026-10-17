@@ -9,6 +9,19 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `API ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export interface Sample {
   id: string;
   framework: string;
@@ -65,6 +78,16 @@ export const api = {
       `/target?id=${encodeURIComponent(id)}${file ? `&file=${encodeURIComponent(file)}` : ""}`,
     ),
   diff: (id: string) => get<DiffResult>(`/diff?id=${encodeURIComponent(id)}`),
+  convert: (sampleId: string) => post<{ task_id: string }>("/convert", { sample_id: sampleId }),
+  taskStatus: (taskId: string) => get<{ status: string; message: string; error?: string; out_files?: string[] }>(
+    `/task/${taskId}`,
+  ),
+  taskFile: (taskId: string, name: string) =>
+    get<{ content: string; file: string }>(
+      `/task/${taskId}/file?name=${encodeURIComponent(name)}`,
+    ),
+  taskDiff: (taskId: string) =>
+    get<DiffResult & { file: string }>(`/task/${taskId}/diff`),
   mapping: (query: string, direction: string, limit = 100) =>
     get<{ total: number; items: MappingItem[] }>(
       `/mapping?query=${encodeURIComponent(query)}&direction=${encodeURIComponent(

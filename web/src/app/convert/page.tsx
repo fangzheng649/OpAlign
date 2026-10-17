@@ -3,11 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Boxes,
+  CheckCircle2,
   FileCode2,
   GitCompareArrows,
   Layers3,
+  Loader2,
   Search,
   Sparkles,
+  Zap,
 } from "lucide-react";
 import CodeView from "@/components/CodeView";
 import { api, type DiffResult, type Sample } from "@/lib/api";
@@ -30,6 +33,10 @@ export default function ConvertPage() {
   const [patch, setPatch] = useState<{ name: string; content: string } | null>(null);
   const [tab, setTab] = useState<"diff" | "patch">("diff");
   const [loading, setLoading] = useState(false);
+  // 真实转换
+  const [converting, setConverting] = useState(false);
+  const [convertMsg, setConvertMsg] = useState("");
+  const [converted, setConverted] = useState(false);
 
   useEffect(() => {
     api.samples().then((res) => {
@@ -45,6 +52,8 @@ export default function ConvertPage() {
     setLoading(true);
     setPatch(null);
     setTab("diff");
+    setConverted(false);
+    setConvertMsg("");
     Promise.all([
       api.source(selected.id).catch(() => ({ content: "", file: "" })),
       selected.has_target
@@ -66,6 +75,41 @@ export default function ConvertPage() {
     const res = await api.target(selected.id, name).catch(() => ({ content: "", file: name }));
     setPatch({ name, content: res.content });
     setTab("patch");
+  };
+
+  /** 发起真实转换（需后端具备 torch+paddle 环境） */
+  const runRealConvert = async () => {
+    if (!selected || converting) return;
+    setConverting(true);
+    setConverted(false);
+    setConvertMsg("提交转换任务...");
+    try {
+      const { task_id } = await api.convert(selected.id);
+      const poll = async (): Promise<void> => {
+        const st = await api.taskStatus(task_id);
+        if (st.status === "completed") {
+          const d = await api.taskDiff(task_id);
+          const f = await api.taskFile(task_id, d.file);
+          // 源码保持当前视图，仅更新产物与 diff
+          setTgt(f.content);
+          setDiff({ ops: d.ops, similarity: d.similarity, src_lines: d.src_lines, tgt_lines: d.tgt_lines });
+          setConverted(true);
+          setConvertMsg("");
+          setTab("diff");
+          setConverting(false);
+        } else if (st.status === "failed") {
+          setConvertMsg(`转换失败：${st.error || st.message || "未知错误"}`);
+          setConverting(false);
+        } else {
+          setConvertMsg(st.message || "转换执行中...");
+          setTimeout(poll, 2000);
+        }
+      };
+      setTimeout(poll, 1500);
+    } catch (e) {
+      setConvertMsg(e instanceof Error ? e.message : "转换请求失败");
+      setConverting(false);
+    }
   };
 
   const { srcDiff, tgtDiff } = useMemo(() => {
@@ -172,9 +216,40 @@ export default function ConvertPage() {
                   {selected.patches.length} 个语义补丁
                 </span>
               )}
+              {converted && (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-50 px-3 py-1 font-mono text-xs text-emerald-700">
+                  <CheckCircle2 size={13} />
+                  本次真实转换结果
+                </span>
+              )}
+              {converterAvailable ? (
+                <button
+                  onClick={runRealConvert}
+                  disabled={converting}
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {converting ? (
+                    <>
+                      <Loader2 size={15} className="animate-spin" /> {convertMsg || "转换执行中..."}
+                    </>
+                  ) : (
+                    <>
+                      <Zap size={15} /> 真实转换此模型
+                    </>
+                  )}
+                </button>
+              ) : (
+                <span className="ml-auto" />
+              )}
             </div>
 
-            {!selected.has_target && (
+            {convertMsg && !converting && (
+              <div className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">
+                {convertMsg}
+              </div>
+            )}
+
+            {!selected.has_target && !converted && (
               <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
                 该示例暂无预置转换产物（演示模式）。安装 PyTorch 与 PaddlePaddle
                 后可通过后端 <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">POST /api/convert</code> 执行真实转换，
@@ -183,7 +258,7 @@ export default function ConvertPage() {
             )}
 
             {/* Tab 切换 */}
-            {selected.has_target && (
+            {(selected.has_target || converted) && (
               <div className="mb-3 flex gap-1 rounded-lg border border-border bg-muted p-1">
                 <button
                   onClick={() => setTab("diff")}
@@ -210,7 +285,7 @@ export default function ConvertPage() {
 
             {loading && <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>}
 
-            {!loading && tab === "diff" && selected.has_target && (
+            {!loading && tab === "diff" && (selected.has_target || converted) && (
               <div className="grid gap-3 xl:grid-cols-2">
                 <CodeView
                   code={src}
@@ -219,7 +294,7 @@ export default function ConvertPage() {
                 />
                 <CodeView
                   code={tgt}
-                  title={`产物 · ${selected.name}.py (PaddlePaddle)`}
+                  title={`产物 · ${selected.name}.py (PaddlePaddle${converted ? " · 刚刚生成" : ""})`}
                   diffLines={tgtDiff}
                 />
               </div>

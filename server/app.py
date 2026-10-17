@@ -272,7 +272,10 @@ def convert(req: ConvertReq):
         raise HTTPException(status_code=400, detail="缺少 sample_id 或 code")
 
     task_id = uuid.uuid4().hex[:8]
-    tasks[task_id] = {"status": "pending", "progress": 0, "message": "", "log": "", "out_dir": str(work_dir)}
+    tasks[task_id] = {
+        "status": "pending", "progress": 0, "message": "", "log": "",
+        "out_dir": str(work_dir), "sample_id": req.sample_id,
+    }
 
     def worker():
         import subprocess
@@ -320,5 +323,30 @@ def task_file(task_id: str, name: str):
     t = tasks.get(task_id)
     if not t:
         raise HTTPException(status_code=404, detail="任务不存在")
-    base = Path(t["out_dir"])
+    base = Path(t["out_dir"]) / "out"  # 产物统一写在 out 子目录
     return {"content": _safe_read(base / name, base)}
+
+
+@app.get("/api/task/{task_id}/diff")
+def task_diff(task_id: str):
+    """对真实转换任务：计算示例源码与转换主产物的行级 diff"""
+    t = tasks.get(task_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if t.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="任务尚未完成")
+    out_files = [f for f in t.get("out_files", []) if not f.startswith("modified_")]
+    if not out_files:
+        raise HTTPException(status_code=404, detail="任务没有主产物文件")
+    src = source_file(t["sample_id"])["content"]
+    base = Path(t["out_dir"]) / "out"
+    tgt = _safe_read(base / out_files[0], base)
+    a, b = src.splitlines(), tgt.splitlines()
+    sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+    ops = [
+        {"tag": tag, "a1": i1, "a2": i2, "b1": j1, "b2": j2}
+        for tag, i1, i2, j1, j2 in sm.get_opcodes()
+        if tag != "equal"
+    ]
+    return {"ops": ops, "similarity": round(sm.ratio(), 4),
+            "src_lines": len(a), "tgt_lines": len(b), "file": out_files[0]}

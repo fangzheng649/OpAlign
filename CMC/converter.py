@@ -158,7 +158,9 @@ class Converter:
                 # If it's already a directory, directly get the absolute path of the directory
                 self.out_dir = os.path.abspath(self.out_dir)
             else:
-                raise ValueError("The input 'out_dir' must be a file or directory!")
+                # Treat it as a to-be-created output directory
+                os.makedirs(self.out_dir)
+                self.out_dir = os.path.abspath(self.out_dir)
 
         if self.out_dir.endswith(".py"):
             commonGenerateHelper(os.path.join(os.path.dirname(self.out_dir), "info", "codeGenerationInfo.py"))

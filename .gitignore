@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 运行产物
+logs/
+output/
+
+# 前端
+web/node_modules/
+web/.next/
+
+# OS
+.DS_Store
+Thumbs.db

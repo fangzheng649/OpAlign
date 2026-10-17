@@ -13,7 +13,7 @@ OpAlign 是一个**源代码级**的深度学习模型跨框架转换工具。�
 - **CLI 转换器**：`python main.py --in_dir <源文件/目录> --out_dir <输出目录>`，将 PyTorch 模型代码转换为 PaddlePaddle（含反向映射表）
 - **语义补丁机制**：语义不一致算子自动在框架源码层面打补丁，持久化为 `modified_XXX.py`（Python 层）或编译为动态库（C 层）
 - **缺失算子构建**：如 `torch.addcdiv` 在 Paddle 中不存在时，自动合成 `paddle.add(value, paddle.multiply(value, paddle.divide(t1, t2)))`
-- **Web 工作台**：示例模型浏览、源码↔产物行级 diff、语义补丁查看、542 条算子映射表检索
+- **Web 工作台**：示例模型浏览、源码↔产物行级 diff、语义补丁查看、541 条算子映射表检索
 - **评测套件**：算子等价性（MAE/RMSE）、与基线工具对比、鲁棒性实验等四组实验脚本与数据集
 
 ## 快速开始
@@ -93,7 +93,7 @@ npm run dev
 |------|------|
 | 总览 | 工具介绍、方法流程、映射规则/示例模型统计 |
 | 转换工作台 | 按领域浏览示例模型，查看源码↔产物行级 diff 高亮、语义补丁文件 |
-| 算子映射 | 检索 542 条 PyTorch→PaddlePaddle 映射规则（含映射类型、variantCode 标注） |
+| 算子映射 | 检索 541 条 PyTorch→PaddlePaddle 映射规则（含映射类型、variantCode 标注） |
 
 > 后端未安装 PyTorch / PaddlePaddle 时，工作台自动进入**演示模式**，浏览 `EVALUATION` 中预置的转换产物；两个框架均安装后，`POST /api/convert` 可执行真实转换。
 
@@ -110,7 +110,7 @@ OpAlign/
 │   ├── special_mapping.py      #   特殊模块映射常量
 │   ├── utils.py                #   框架源码反射、补丁持久化、CMake 生成与编译
 │   ├── Matchers/               #   各类 Matcher（直接映射/参数改写/算子序列合成...）
-│   ├── pytorch_to_paddlepaddle.json   # 正向算子映射表（542 条，含 variantCode）
+│   ├── pytorch_to_paddlepaddle.json   # 正向算子映射表（541 条，含 variantCode）
 │   ├── paddlepaddle_to_pytorch.json   # 反向映射表（140 条）
 │   └── *_CMakeLists_template.txt      # C 层补丁编译模板（需手填依赖路径）
 ├── server/                     # FastAPI Web API

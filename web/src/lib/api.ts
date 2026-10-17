@@ -47,6 +47,7 @@ export interface DiffResult {
 export interface MappingItem {
   source_api: string;
   target_api: string;
+  auto_resolved: boolean;
   matcher: string;
   has_variant_code: boolean;
   params_change: Record<string, unknown>;

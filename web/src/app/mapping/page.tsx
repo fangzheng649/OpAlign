@@ -112,7 +112,18 @@ export default function MappingPage() {
                   <td className="px-2 py-2 text-accent">
                     <ArrowRight size={14} />
                   </td>
-                  <td className="px-4 py-2 font-mono text-[13px] text-primary">{m.target_api || "—"}</td>
+                  <td className="px-4 py-2 font-mono text-[13px]">
+                    {m.target_api ? (
+                      <span className="text-primary">{m.target_api}</span>
+                    ) : (
+                      <span
+                        className="rounded bg-muted px-2 py-0.5 text-[11px] italic text-muted-foreground"
+                        title="该算子的目标 API 由转换器运行时通过框架反射与模糊匹配自动定位（如 torch.nn.MaxPool2d → paddle.nn.MaxPool2D）"
+                      >
+                        运行时自动解析
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-2">
                     <span className="rounded bg-secondary px-2 py-0.5 font-mono text-[11px] text-secondary-foreground">
                       {MATCHER_DESC[m.matcher] || m.matcher}

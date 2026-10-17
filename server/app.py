@@ -111,15 +111,16 @@ def stats():
         if path.is_file():
             import json
             data = json.loads(path.read_text(encoding="utf-8"))
+            rules = {k: v for k, v in data.items() if isinstance(v, dict)}
             matcher_count: Dict[str, int] = {}
             variant = 0
-            for api, cfg in data.items():
-                m = cfg.get("Matcher", "unknown") if isinstance(cfg, dict) else "unknown"
+            for api, cfg in rules.items():
+                m = cfg.get("Matcher", "unknown")
                 matcher_count[m] = matcher_count.get(m, 0) + 1
-                if isinstance(cfg, dict) and cfg.get("variantCode"):
+                if cfg.get("variantCode"):
                     variant += 1
             mapping_stats[label] = {
-                "total": len(data),
+                "total": len(rules),
                 "matchers": matcher_count,
                 "variant_code": variant,
             }
@@ -220,11 +221,15 @@ def mapping(query: str = "", direction: str = "pytorch→paddlepaddle", limit: i
     q = query.strip().lower()
     items = []
     for api, cfg in data.items():
+        if not isinstance(cfg, dict):
+            continue  # 跳过 _comment 等元数据键
         if q and q not in api.lower() and q not in str(cfg.get("target_api", "")).lower():
             continue
         items.append({
             "source_api": api,
             "target_api": cfg.get("target_api", ""),
+            # 多数条目不显式写 target_api：转换器运行时通过框架反射 + 模糊匹配定位目标 API
+            "auto_resolved": not cfg.get("target_api"),
             "matcher": cfg.get("Matcher", ""),
             "has_variant_code": bool(cfg.get("variantCode")),
             "params_change": cfg.get("params_change", {}),

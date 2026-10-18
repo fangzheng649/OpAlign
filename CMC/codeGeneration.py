@@ -4,17 +4,18 @@ import textwrap
 
 
 def singleton(cls):
+    """按类缓存单例；当再次以不同的 fileName 构造时重置状态，避免跨转换串目录"""
     instances = {}
 
     def get_instance(*args, **kwargs):
         if cls not in instances:
             instances[cls] = cls(*args, **kwargs)
+        else:
+            new_name = kwargs.get("fileName") or (args[0] if args else None)
+            inst = instances[cls]
+            if new_name and getattr(inst, "fileName", None) != new_name:
+                inst.__init__(*args, **kwargs)
         return instances[cls]
-
-    def __new__(cls, fileName=None, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
 
     return get_instance
 
@@ -22,13 +23,14 @@ def singleton(cls):
 @singleton
 class commonGenerateHelper:
     def __init__(self, fileName=None, *args, **kwargs):
-        if fileName:
-            self.fileName = fileName
-            self.ids = collections.defaultdict(bool)
-            # Indicates whether the template code has been written
-            self.code_written = False
+        self.fileName = fileName
+        self.ids = collections.defaultdict(bool)
+        # Indicates whether the template code has been written
+        self.code_written = False
 
     def generate_model_code(self, code, target_api, targetClass="paddle"):
+        if not self.fileName:
+            return
         if not self.code_written:
             CODE_CONTENT = textwrap.dedent(
                 """

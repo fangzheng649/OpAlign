@@ -26,17 +26,24 @@ OpAlign 是一个**源代码级**的深度学习模型跨框架转换工具。�
 
 ### 1. 安装依赖
 
-```bash
-# 核心转换依赖
-pip install astor==0.8.1 numpy
+**推荐环境配方**（已在 Windows 11 实测通过全部 18 个示例的真实转换）：
 
-# 两个深度学习框架（按需选择版本，实验环境为 PyTorch 2.0.1 / Paddle 2.5.2）
-pip install torch
-pip install paddlepaddle
+```bash
+# Python 3.12 + CPU 版框架（转换只做 AST 分析与签名反射，不需要 GPU）
+conda create -n opalign python=3.12 -y
+conda activate opalign
+
+pip install torch --index-url https://pypi.org/simple          # 实测 2.14.1+cpu
+pip install paddlepaddle                                       # 实测 3.3.1
+pip install protobuf==3.20.3                                   # 规避 paddle 与 protobuf 7 的 proto 冲突
+pip install astor==0.8.1 pandas scikit-learn fastapi uvicorn
 
 # 如需运行 EVALUATION 下的实验脚本
 pip install -r requirements.txt
 ```
+
+> 版本说明：工具构建于 PyTorch 2.0.1 / Paddle 2.5.2，但已在新版（2.14 / 3.3）验证可用；
+> 若遇到 `duplicate file name ... distributed_strategy.proto`，即 protobuf 版本过高，按上方钉版即可。
 
 ### 2. CLI 转换
 
@@ -78,7 +85,6 @@ LD_PRELOAD=/path/to/build/libmodified_xxx.so python xxxx.py
 
 ```bash
 # 终端 1：启动后端 API（端口 8100）
-pip install fastapi uvicorn
 uvicorn server.app:app --port 8100
 
 # 终端 2：启动前端
@@ -91,11 +97,23 @@ npm run dev
 
 | 页面 | 功能 |
 |------|------|
-| 总览 | 工具介绍、方法流程、映射规则/示例模型统计 |
-| 转换工作台 | 按领域浏览示例模型，查看源码↔产物行级 diff 高亮、语义补丁文件 |
+| 总览 | 工具介绍、方法流程图、映射规则/示例模型统计 |
+| 转换工作台 | 按领域浏览示例模型，源码↔产物行级 diff 高亮、语义补丁查看 |
 | 算子映射 | 检索 541 条 PyTorch→PaddlePaddle 映射规则（含映射类型、variantCode 标注） |
+| 实验评测 | 1,349 算子不一致分布、686 算子成功率、模型级 F1 对比、跨领域 Metric Gap 等图表 |
 
-> 后端未安装 PyTorch / PaddlePaddle 时，工作台自动进入**演示模式**，浏览 `EVALUATION` 中预置的转换产物；两个框架均安装后，`POST /api/convert` 可执行真实转换。
+工作台行为说明：
+
+- **环境具备 torch + paddle** 时：选中任意示例即**自动执行真实转换**（约 10–30 秒），结果直接展示 diff；
+  转换成功的产物会写入服务端缓存（`output/cache/`），**之后访问秒开，不重复转换**
+- 未装框架时自动进入**演示模式**，浏览 6 组预置转换产物
+- 也可以手动点「真实转换此模型」重新触发；同一示例的进行中任务会被去重复用
+
+一次性预转换全部示例（演示前预热）：
+
+```bash
+python scripts/preconvert_all.py   # 需后端已启动
+```
 
 ## 项目结构
 
@@ -113,8 +131,9 @@ OpAlign/
 │   ├── pytorch_to_paddlepaddle.json   # 正向算子映射表（541 条，含 variantCode）
 │   ├── paddlepaddle_to_pytorch.json   # 反向映射表（140 条）
 │   └── *_CMakeLists_template.txt      # C 层补丁编译模板（需手填依赖路径）
-├── server/                     # FastAPI Web API
+├── server/                     # FastAPI Web API（含 results_data.json 评测数据）
 ├── web/                        # Next.js 前端（蓝白科技风工作台）
+├── scripts/                    # 辅助脚本（preconvert_all.py 批量预转换）
 └── EVALUATION/                 # 评测实验
     ├── datasets/
     │   ├── models/             #   69 个源模型 + 转换产物（vision/text/audio）

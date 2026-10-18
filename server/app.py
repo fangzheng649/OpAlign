@@ -5,11 +5,16 @@ OpAlign Web API — FastAPI 后端
 真实转换需要后端环境可导入 PyTorch 与 PaddlePaddle；环境缺失时前端
 自动进入演示模式（浏览 EVALUATION 中预置的转换产物）。
 
+转换结果缓存：示例成功转换后写入 output/cache/models/<framework>/<domain>/<name>/，
+之后访问直接命中缓存，不重复执行；与 EVALUATION 预置产物合并展示。
+
 启动：
     uvicorn server.app:app --port 8100
 """
 
 import difflib
+import re
+import shutil
 import threading
 import uuid
 from pathlib import Path
@@ -21,6 +26,7 @@ from pydantic import BaseModel
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_ROOT / "EVALUATION" / "datasets" / "models"
+CACHE_ROOT = PROJECT_ROOT / "output" / "cache" / "models"  # 真实转换结果缓存
 MAPPING_FILES = {
     "pytorch→paddlepaddle": PROJECT_ROOT / "CMC" / "pytorch_to_paddlepaddle.json",
     "paddlepaddle→pytorch": PROJECT_ROOT / "CMC" / "paddlepaddle_to_pytorch.json",
@@ -43,21 +49,63 @@ app.add_middleware(
 # 工具
 # ---------------------------------------------------------------------------
 
+_ID_SEPARATORS = re.compile(r"[/\\]+")
+
+
+def _parse_id(id: str):
+    """解析示例 id（framework/domain/name），兼容正反斜杠并拒绝路径穿越"""
+    parts = [p for p in _ID_SEPARATORS.split(id) if p and p not in (".", "..")]
+    if len(parts) != 3 or any(":" in p for p in parts):
+        raise HTTPException(status_code=400, detail="id 格式应为 framework/domain/name")
+    return parts[0], parts[1], parts[2]
+
+
 def _safe_read(path: Path, base: Path) -> str:
-    """限制读取范围在 base 目录内，防止路径穿越"""
+    """限制读取范围在 base 目录内，防止路径穿越；容忍 Windows 保留名等解析异常"""
     try:
         resolved = path.resolve()
         resolved.relative_to(base.resolve())
-    except ValueError:
+    except (ValueError, OSError):
         raise HTTPException(status_code=400, detail="非法路径")
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
     return resolved.read_text(encoding="utf-8", errors="replace")
 
 
-def _domain_of(rel_dir: Path) -> str:
-    parts = rel_dir.parts  # e.g. ('pytorch', 'vision', 'sourceModels')
-    return parts[1] if len(parts) > 1 else ""
+def _pick_main(candidates: List[Path], name: str) -> Optional[Path]:
+    """主模型文件优选：同名 > 前缀匹配 > 最大的非 __init__ 文件"""
+    if not candidates:
+        return None
+    main = next((p for p in candidates if p.stem == name), None)
+    if main is None:
+        main = next((p for p in candidates if p.stem.startswith(name)), None)
+    if main is None:
+        non_init = [p for p in candidates if p.stem != "__init__"]
+        pool = non_init or candidates
+        main = max(pool, key=lambda p: p.stat().st_size)
+    return main
+
+
+def _cache_dir(framework: str, domain: str, name: str) -> Path:
+    return CACHE_ROOT / framework / domain / name
+
+
+def _artifact_files(framework: str, domain: str, name: str) -> Dict[str, Path]:
+    """
+    示例的转换产物集合：{相对路径: 文件绝对路径}
+    缓存（真实转换）与预置产物合并，同名文件以缓存为准。
+    预置产物中的 modified_* 语义补丁不会因缓存存在而丢失。
+    """
+    files: Dict[str, Path] = {}
+    for base in (
+        MODELS_DIR / framework / domain / "targetModels" / name,  # 预置（先扫，可被覆盖）
+        _cache_dir(framework, domain, name),                      # 缓存（后扫，覆盖同名）
+    ):
+        if base.is_dir():
+            for p in base.rglob("*.py"):
+                rel = str(p.relative_to(base)).replace("\\", "/")
+                files[rel] = p
+    return files
 
 
 def _list_models(framework: str) -> List[dict]:
@@ -68,7 +116,6 @@ def _list_models(framework: str) -> List[dict]:
         return samples
     for domain_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         src_dir = domain_dir / "sourceModels"
-        tgt_dir = domain_dir / "targetModels"
         if not src_dir.is_dir():
             continue
         for entry in sorted(src_dir.iterdir()):
@@ -78,20 +125,32 @@ def _list_models(framework: str) -> List[dict]:
                 stem = entry.name
             else:
                 continue
-            # 对应转换产物
-            tgt_folder = tgt_dir / stem
-            tgt_files = sorted(p.name for p in tgt_folder.glob("*.py")) if tgt_dir.joinpath(stem).is_dir() else []
-            patches = [f for f in tgt_files if f.startswith("modified_")]
+            artifacts = _artifact_files(framework, domain_dir.name, stem)
+            tgt_files = sorted(artifacts.keys())
+            patches = [f for f in tgt_files if Path(f).name.startswith("modified_")]
+            cached = any(
+                Path(p).is_relative_to(CACHE_ROOT) for p in artifacts.values()
+            )
             samples.append({
                 "id": f"{framework}/{domain_dir.name}/{stem}",
                 "framework": framework,
                 "domain": domain_dir.name,      # vision / text / audio
                 "name": stem,
                 "has_target": bool(tgt_files),
+                "cached": cached,
                 "target_files": tgt_files,
                 "patches": patches,
             })
     return samples
+
+
+def _converter_available() -> bool:
+    """检测真实转换所需的重型依赖是否可用（torch/paddle 均需可导入）"""
+    try:
+        import importlib.util
+        return importlib.util.find_spec("torch") is not None and importlib.util.find_spec("paddle") is not None
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -114,10 +173,10 @@ def results():
 @app.get("/api/stats")
 def stats():
     """首页统计卡片数据"""
+    import json
     mapping_stats = {}
     for label, path in MAPPING_FILES.items():
         if path.is_file():
-            import json
             data = json.loads(path.read_text(encoding="utf-8"))
             rules = {k: v for k, v in data.items() if isinstance(v, dict)}
             matcher_count: Dict[str, int] = {}
@@ -141,22 +200,9 @@ def stats():
     }
 
 
-def _converter_available() -> bool:
-    """检测真实转换所需的重型依赖是否可用（torch/paddle 均需可导入）"""
-    try:
-        import importlib.util
-        return importlib.util.find_spec("torch") is not None and importlib.util.find_spec("paddle") is not None
-    except Exception:
-        return False
-
-
 @app.get("/api/samples")
 def samples(framework: str = "pytorch"):
     return {"samples": _list_models(framework), "converter_available": _converter_available()}
-
-
-class FileReq(BaseModel):
-    path: str  # 形如 "pytorch/vision/densenet"（示例）或带文件名
 
 
 @app.get("/api/source")
@@ -166,58 +212,52 @@ def source_file(id: str, file: Optional[str] = None):
     src_dir = MODELS_DIR / framework / domain / "sourceModels" / name
     path = src_dir / file if file else (src_dir if src_dir.is_dir() else src_dir.with_suffix(".py"))
     if path.is_dir():
-        # 目录型示例：优先与目录同名的主模型文件，其次最大的非 __init__ 文件
-        files = sorted(p for p in path.glob("*.py"))
-        main = next((p for p in files if p.stem.startswith(name)), None)
+        main = _pick_main(sorted(path.glob("*.py")), name)
         if main is None:
-            non_init = [p for p in files if p.stem != "__init__"]
-            main = max(non_init or files, key=lambda p: p.stat().st_size)
+            raise HTTPException(status_code=404, detail="目录中没有 Python 文件")
         path = main
     return {"content": _safe_read(path, MODELS_DIR), "file": path.name}
 
 
 @app.get("/api/target")
 def target_file(id: str, file: Optional[str] = None):
-    """读取示例的转换产物。缺省取主产物，file 可指定补丁文件"""
+    """读取示例的转换产物（缓存与预置合并）。缺省取主产物，file 可指定补丁文件"""
     framework, domain, name = _parse_id(id)
-    tgt_dir = MODELS_DIR / framework / domain / "targetModels" / name
-    if not tgt_dir.is_dir():
-        raise HTTPException(status_code=404, detail="该示例暂无预置转换产物")
+    artifacts = _artifact_files(framework, domain, name)
+    if not artifacts:
+        raise HTTPException(status_code=404, detail="该示例暂无转换产物")
     if file:
-        path = tgt_dir / file
+        rel = file.replace("\\", "/").lstrip("/")
+        if rel not in artifacts:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        path = artifacts[rel]
     else:
-        cands = [p for p in sorted(tgt_dir.glob("*.py")) if not p.name.startswith("modified_")]
-        if not cands:
+        non_patch = [p for r, p in artifacts.items() if not Path(r).name.startswith("modified_")]
+        main = _pick_main(non_patch, name)
+        if main is None:
             raise HTTPException(status_code=404, detail="未找到主产物文件")
-        path = cands[0]
-    return {"content": _safe_read(path, MODELS_DIR), "file": path.name}
+        path = main
+    return {"content": _safe_read(path, PROJECT_ROOT), "file": path.name}
 
 
-def _parse_id(id: str):
-    parts = [p for p in id.split("/") if p and p not in (".", "..")]
-    if len(parts) != 3:
-        raise HTTPException(status_code=400, detail="id 格式应为 framework/domain/name")
-    return parts[0], parts[1], parts[2]
+def _diff_texts(src: str, tgt: str) -> dict:
+    a, b = src.splitlines(), tgt.splitlines()
+    sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+    ops = [
+        {"tag": tag, "a1": i1, "a2": i2, "b1": j1, "b2": j2}
+        for tag, i1, i2, j1, j2 in sm.get_opcodes()
+        if tag != "equal"
+    ]
+    return {"ops": ops, "similarity": round(sm.ratio(), 4),
+            "src_lines": len(a), "tgt_lines": len(b)}
 
 
 @app.get("/api/diff")
 def diff_files(id: str):
     """返回源码与转换产物的行级 diff（sm opcodes）"""
     src = source_file(id)["content"]
-    tgt = target_file(id)["content"]
-    a, b = src.splitlines(), tgt.splitlines()
-    sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
-    ops = []
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag != "equal":
-            ops.append({"tag": tag, "a1": i1, "a2": i2, "b1": j1, "b2": j2})
-    ratio = sm.ratio()
-    return {
-        "ops": ops,
-        "similarity": round(ratio, 4),
-        "src_lines": len(a),
-        "tgt_lines": len(b),
-    }
+    tgt = target_file(id)
+    return {**_diff_texts(src, tgt["content"]), "file": tgt["file"]}
 
 
 # ---------------------------------------------------------------------------
@@ -256,12 +296,23 @@ def mapping(query: str = "", direction: str = "pytorch→paddlepaddle", limit: i
 # ---------------------------------------------------------------------------
 
 tasks: Dict[str, dict] = {}
+# 示例 → task_id 去重表：同一示例的转换任务只跑一份（进程内有效）
+sample_tasks: Dict[str, str] = {}
+_tasks_lock = threading.Lock()
 
 
 class ConvertReq(BaseModel):
     sample_id: Optional[str] = None   # 使用预置示例
     code: Optional[str] = None        # 或直接提交代码
     filename: str = "model.py"
+
+
+def _sanitize_filename(filename: str) -> str:
+    """只保留文件名部分，拒绝目录/绝对路径/穿越"""
+    name = Path(filename.replace("\\", "/")).name
+    if not name or name in (".", ".."):
+        raise HTTPException(status_code=400, detail="非法文件名")
+    return name
 
 
 @app.post("/api/convert")
@@ -272,11 +323,31 @@ def convert(req: ConvertReq):
             detail="当前后端环境缺少 PyTorch / PaddlePaddle，无法执行真实转换。"
                    "请安装两个框架后重试，或使用演示模式浏览预置转换结果。",
         )
+
+    # 自定义代码与示例缓存逻辑互斥：带 code 时不命中/不写示例缓存，避免污染
+    cacheable = req.code is None and req.sample_id is not None
+
+    if cacheable:
+        framework, domain, name = _parse_id(req.sample_id)
+        cache_dir = _cache_dir(framework, domain, name)
+        if cache_dir.is_dir() and any(cache_dir.rglob("*.py")):
+            return {"cached": True, "sample_id": req.sample_id}
+        # 任务去重（加锁防并发双跑）
+        with _tasks_lock:
+            existing_id = sample_tasks.get(req.sample_id)
+            if existing_id and tasks.get(existing_id, {}).get("status") in ("pending", "running"):
+                return {"task_id": existing_id, "deduped": True}
+            task_id = uuid.uuid4().hex[:8]
+            sample_tasks[req.sample_id] = task_id
+    else:
+        task_id = uuid.uuid4().hex[:8]
+
     work_dir = PROJECT_ROOT / "output" / "web" / uuid.uuid4().hex[:8]
     work_dir.mkdir(parents=True, exist_ok=True)
     if req.code is not None:
-        (work_dir / req.filename).write_text(req.code, encoding="utf-8")
-        in_path = work_dir / req.filename
+        safe_name = _sanitize_filename(req.filename)
+        (work_dir / safe_name).write_text(req.code, encoding="utf-8")
+        in_path = work_dir / safe_name
     elif req.sample_id:
         framework, domain, name = _parse_id(req.sample_id)
         src = MODELS_DIR / framework / domain / "sourceModels" / name
@@ -284,10 +355,9 @@ def convert(req: ConvertReq):
     else:
         raise HTTPException(status_code=400, detail="缺少 sample_id 或 code")
 
-    task_id = uuid.uuid4().hex[:8]
     tasks[task_id] = {
         "status": "pending", "progress": 0, "message": "", "log": "",
-        "out_dir": str(work_dir), "sample_id": req.sample_id,
+        "out_dir": str(work_dir), "sample_id": req.sample_id if cacheable else None,
     }
 
     def worker():
@@ -309,9 +379,26 @@ def convert(req: ConvertReq):
                 [str(p.relative_to(out_root)).replace("\\", "/") for p in sorted(out_root.rglob("*.py"))]
                 if out_root.is_dir() else []
             )
+            ok = proc.returncode == 0
+            # 原子化写缓存：先写临时目录，全部成功后整体改名，避免半成品缓存
+            if ok and cacheable and out_files:
+                framework, domain, name = _parse_id(req.sample_id)
+                cache_dir = _cache_dir(framework, domain, name)
+                tmp_dir = cache_dir.parent / f".{cache_dir.name}.tmp-{uuid.uuid4().hex[:6]}"
+                try:
+                    for rel in out_files:
+                        dst = tmp_dir / rel
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        dst.write_text((out_root / rel).read_text(encoding="utf-8"), encoding="utf-8")
+                    if cache_dir.exists():
+                        shutil.rmtree(cache_dir)
+                    tmp_dir.rename(cache_dir)
+                except Exception:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    raise
             tasks[task_id].update(
-                status="completed" if proc.returncode == 0 else "failed",
-                message="转换完成" if proc.returncode == 0 else f"进程退出码 {proc.returncode}",
+                status="completed" if ok else "failed",
+                message="转换完成" if ok else f"进程退出码 {proc.returncode}",
                 log=log_text[-8000:],
                 out_files=out_files,
             )
@@ -346,32 +433,15 @@ def task_file(task_id: str, name: str):
 
 @app.get("/api/task/{task_id}/diff")
 def task_diff(task_id: str):
-    """对真实转换任务：计算示例源码与转换主产物的行级 diff"""
+    """对真实转换任务：计算示例源码与转换主产物的行级 diff（走缓存/预置合并产物）"""
     t = tasks.get(task_id)
     if not t:
         raise HTTPException(status_code=404, detail="任务不存在")
     if t.get("status") != "completed":
         raise HTTPException(status_code=400, detail="任务尚未完成")
-    out_files = [f for f in t.get("out_files", []) if not Path(f).name.startswith("modified_")]
-    if not out_files:
-        raise HTTPException(status_code=404, detail="任务没有主产物文件")
-    # 主产物优选：同名 > 前缀匹配 > 最大非 __init__ 文件
-    sample_name = (t.get("sample_id") or "").rsplit("/", 1)[-1]
-    base = Path(t["out_dir"]) / "out"
-    primary = next((f for f in out_files if Path(f).stem == sample_name), None)
-    if primary is None:
-        primary = next((f for f in out_files if Path(f).stem.startswith(sample_name)), None)
-    if primary is None:
-        candidates = [f for f in out_files if Path(f).stem != "__init__"] or out_files
-        primary = max(candidates, key=lambda f: (base / f).stat().st_size if (base / f).exists() else 0)
-    src = source_file(t["sample_id"])["content"]
-    tgt = _safe_read(base / primary, base)
-    a, b = src.splitlines(), tgt.splitlines()
-    sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
-    ops = [
-        {"tag": tag, "a1": i1, "a2": i2, "b1": j1, "b2": j2}
-        for tag, i1, i2, j1, j2 in sm.get_opcodes()
-        if tag != "equal"
-    ]
-    return {"ops": ops, "similarity": round(sm.ratio(), 4),
-            "src_lines": len(a), "tgt_lines": len(b), "file": primary}
+    sample_id = t.get("sample_id")
+    if not sample_id:
+        raise HTTPException(status_code=400, detail="自定义代码任务暂无 diff")
+    src = source_file(sample_id)["content"]
+    tgt = target_file(sample_id)
+    return {**_diff_texts(src, tgt["content"]), "file": tgt["file"]}

@@ -215,6 +215,11 @@ def get_modules_and_operators(parent_package):
     except ImportError as e:
         print(f"无法导入模块 {parent_package}: {e}")
         return []
+    except Exception as e:
+        # 第三方框架的可选子模块在当前环境可能不可导入（如 CPU 版 paddle 的
+        # tensorrt 模块缺 register_paddle_plugin），跳过而非中断整体遍历
+        print(f"跳过不可用模块 {parent_package}: {type(e).__name__}: {e}")
+        return []
 
 
 def search_mapping_api(aliasName, logger, sourceDLClass="pytorch", targetDLClass="paddlepaddle"):

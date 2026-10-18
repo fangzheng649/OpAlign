@@ -13,8 +13,7 @@ import {
   Zap,
 } from "lucide-react";
 import CodeView from "@/components/CodeView";
-import { api, type DiffResult, type Sample } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { api, type DiffResult, type Sample } from "@/lib/api";import { cn } from "@/lib/utils";
 
 const DOMAIN_LABEL: Record<string, string> = {
   vision: "视觉",
@@ -40,6 +39,11 @@ export default function ConvertPage() {
   // 已尝试自动转换的示例（避免重复触发）
   const attemptedRef = useRef<Set<string>>(new Set());
   const convertingIdRef = useRef<string | null>(null);
+  // 当前选中的示例 id（供异步回调校验结果归属，防止串样本）
+  const selectedIdRef = useRef<string>("");
+  useEffect(() => {
+    selectedIdRef.current = selected?.id ?? "";
+  }, [selected]);
 
   useEffect(() => {
     api.samples().then((res) => {
@@ -82,33 +86,56 @@ export default function ConvertPage() {
 
   /** 发起真实转换（需后端具备 torch+paddle 环境） */
   const runRealConvert = async () => {
-    if (!selected || converting || convertingIdRef.current === selected.id) return;
-    convertingIdRef.current = selected.id;
+    if (!selected || convertingIdRef.current) return;
+    const sampleId = selected.id;
+    convertingIdRef.current = sampleId;
     setConverting(true);
     setConverted(false);
     setConvertMsg("提交转换任务...");
+
+    // 仅在用户仍停留在该示例时才应用结果
+    const applyResult = async (d: DiffResult, content: string) => {
+      if (selectedIdRef.current !== sampleId) return;
+      setTgt(content);
+      setDiff({ ops: d.ops, similarity: d.similarity, src_lines: d.src_lines, tgt_lines: d.tgt_lines });
+      setConverted(true);
+      setConvertMsg("");
+      setTab("diff");
+    };
+
     try {
-      const { task_id } = await api.convert(selected.id);
+      const res = await api.convert(sampleId);
+      // 缓存命中：此前已转换过，直接读取产物与 diff
+      if (res.cached) {
+        const [d, t] = await Promise.all([api.diff(sampleId), api.target(sampleId)]);
+        await applyResult(d, t.content);
+        setConverting(false);
+        convertingIdRef.current = null;
+        return;
+      }
+      const task_id = res.task_id!;
       const poll = async (): Promise<void> => {
-        const st = await api.taskStatus(task_id);
-        if (st.status === "completed") {
-          const d = await api.taskDiff(task_id);
-          const f = await api.taskFile(task_id, d.file);
-          // 源码保持当前视图，仅更新产物与 diff
-          setTgt(f.content);
-          setDiff({ ops: d.ops, similarity: d.similarity, src_lines: d.src_lines, tgt_lines: d.tgt_lines });
-          setConverted(true);
-          setConvertMsg("");
-          setTab("diff");
+        try {
+          const st = await api.taskStatus(task_id);
+          if (st.status === "completed") {
+            const d = await api.taskDiff(task_id);
+            const f = await api.taskFile(task_id, d.file);
+            await applyResult(d, f.content);
+            setConverting(false);
+            convertingIdRef.current = null;
+          } else if (st.status === "failed") {
+            setConvertMsg(`转换失败：${st.error || st.message || "未知错误"}`);
+            setConverting(false);
+            convertingIdRef.current = null;
+          } else {
+            setConvertMsg(st.message || "转换执行中...");
+            setTimeout(poll, 2000);
+          }
+        } catch (e) {
+          // 轮询出错（如后端重启导致任务丢失）：解除卡死，允许重试
+          setConvertMsg(`状态查询失败：${e instanceof Error ? e.message : "网络错误"}，请重试`);
           setConverting(false);
           convertingIdRef.current = null;
-        } else if (st.status === "failed") {
-          setConvertMsg(`转换失败：${st.error || st.message || "未知错误"}`);
-          setConverting(false);
-          convertingIdRef.current = null;
-        } else {
-          setConvertMsg(st.message || "转换执行中...");
-          setTimeout(poll, 2000);
         }
       };
       setTimeout(poll, 1500);
@@ -119,19 +146,15 @@ export default function ConvertPage() {
     }
   };
 
-  /** 无预置产物且环境可用时，选中即自动真实转换（每个示例仅自动触发一次） */
+  /** 无预置产物且环境可用时，选中即自动真实转换（每示例一次；有任务在跑则等其完成后补触发） */
   useEffect(() => {
-    if (
-      selected &&
-      !selected.has_target &&
-      converterAvailable &&
-      !attemptedRef.current.has(selected.id)
-    ) {
-      attemptedRef.current.add(selected.id);
-      runRealConvert();
-    }
+    if (!selected || selected.has_target || !converterAvailable) return;
+    if (attemptedRef.current.has(selected.id)) return;
+    if (convertingIdRef.current) return; // 其他示例转换中：不标记 attempted，完成后 effect 重跑会补触发
+    attemptedRef.current.add(selected.id);
+    runRealConvert();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, converterAvailable]);
+  }, [selected, converterAvailable, converting]);
 
   const { srcDiff, tgtDiff } = useMemo(() => {
     const a = new Map<number, "ins" | "del">();

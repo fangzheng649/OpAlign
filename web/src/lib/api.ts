@@ -28,6 +28,7 @@ export interface Sample {
   domain: string;
   name: string;
   has_target: boolean;
+  cached?: boolean;
   target_files: string[];
   patches: string[];
 }
@@ -106,7 +107,8 @@ export const api = {
       `/target?id=${encodeURIComponent(id)}${file ? `&file=${encodeURIComponent(file)}` : ""}`,
     ),
   diff: (id: string) => get<DiffResult>(`/diff?id=${encodeURIComponent(id)}`),
-  convert: (sampleId: string) => post<{ task_id: string }>("/convert", { sample_id: sampleId }),
+  convert: (sampleId: string) =>
+    post<{ task_id?: string; cached?: boolean; deduped?: boolean }>("/convert", { sample_id: sampleId }),
   taskStatus: (taskId: string) => get<{ status: string; message: string; error?: string; out_files?: string[] }>(
     `/task/${taskId}`,
   ),

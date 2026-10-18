@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Sora, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import SideNav from "@/components/SideNav";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
-const jetbrains = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jbmono" });
+const sora = Sora({ subsets: ["latin"], variable: "--font-sans" });
+const jetbrains = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
   title: "OpAlign — 跨框架模型转换 · 算子语义对齐",
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body className={`${inter.variable} ${jetbrains.variable} font-sans`}>
+      <body className={`${sora.variable} ${jetbrains.variable} font-sans`}>
         <div className="flex min-h-screen">
           <SideNav />
           <main className="min-w-0 flex-1">{children}</main>

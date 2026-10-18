@@ -283,7 +283,12 @@ export default function ConvertPage() {
               </div>
             )}
 
-            {loading && <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>}
+            {loading && (
+              <div className="grid gap-3 xl:grid-cols-2">
+                <div className="skeleton h-96 rounded-lg" />
+                <div className="skeleton h-96 rounded-lg" />
+              </div>
+            )}
 
             {!loading && tab === "diff" && (selected.has_target || converted) && (
               <div className="grid gap-3 xl:grid-cols-2">

@@ -1,0 +1,59 @@
+{
+  "overview": {
+    "analyzed_operators": 1349,
+    "semantic_attention_ratio": 0.47,
+    "conversion_success_rate": 0.91,
+    "robustness_models": 52
+  },
+  "inconsistency": [
+    { "type": "语法不一致", "count": 712, "ratio": 0.53, "desc": "仅函数路径、参数名、返回类型不同", "example": "torch.cat vs paddle.concat（dim vs axis）" },
+    { "type": "语义不一致", "count": 488, "ratio": 0.36, "desc": "实现逻辑差异导致输出冲突", "example": "torch.divide 支持 rounding_mode，Paddle 不支持" },
+    { "type": "算子缺失", "count": 149, "ratio": 0.11, "desc": "目标框架无对应算子", "example": "torch.addcdiv 在 Paddle 中不存在" }
+  ],
+  "layer_distribution": [
+    { "layer": "Python 层", "ratio": 0.04, "note": "参数初始化、错误处理" },
+    { "layer": "C 层 · 张量表示", "ratio": 0.07, "note": "" },
+    { "layer": "C 层 · 计算逻辑", "ratio": 0.25, "note": "" }
+  ],
+  "conversion": {
+    "total": 686,
+    "success": 624,
+    "by_type": [
+      { "type": "TensorOps", "sampled": 278, "succeeded": 270, "rate": 97.12, "mae": "4.57×10⁻⁷", "rmse": "2.13×10⁻⁶" },
+      { "type": "LayerOps", "sampled": 190, "succeeded": 188, "rate": 98.95, "mae": "3.82×10⁻⁶", "rmse": "1.43×10⁻⁶" },
+      { "type": "OtherOps", "sampled": 218, "succeeded": 166, "rate": 76.14, "mae": "1.67×10⁻⁵", "rmse": "4.36×10⁻⁵" }
+    ]
+  },
+  "model_comparison": {
+    "note": "18 个视觉推理模型，ImageNet-1K，F1 指标",
+    "rows": [
+      { "model": "AlexNet", "onnx": 0.5187, "paconvert": 0.5187, "ours": 0.5187, "note": "无语义不一致，三者持平" },
+      { "model": "VGG", "onnx": 0.6852, "paconvert": 0.6852, "ours": 0.6852, "note": "无语义不一致，三者持平" },
+      { "model": "DenseNet", "onnx": null, "paconvert": null, "ours": 0.7423, "note": "dilation 不一致，仅本方法成功" },
+      { "model": "ShuffleNet", "onnx": null, "paconvert": null, "ours": 0.6708, "note": "dilation 不一致，仅本方法成功" },
+      { "model": "ResNet", "onnx": 0.7338, "paconvert": 0.7337, "ours": 0.7614, "note": "提升约 2%" },
+      { "model": "Inception3", "onnx": 0.6635, "paconvert": null, "ours": 0.6812, "note": "trunc_normal_ 不一致" }
+    ],
+    "latency_note": "平均推理延迟比 ONNX 降低 0.46%，比 PaConvert 降低 1.50%"
+  },
+  "llm_comparison": [
+    { "name": "ChatGPT-3.5", "passed": 2, "total": 18, "note": "语法错误为主" },
+    { "name": "DeepSeek-Coder", "passed": 2, "total": 18, "note": "语法错误为主" },
+    { "name": "ChatGPT-4o", "passed": 9, "total": 18, "note": "最优但仍无法处理语义不一致" },
+    { "name": "OpAlign", "passed": 18, "total": 18, "note": "本方法" }
+  ],
+  "robustness": {
+    "note": "52 个模型跨视觉/文本/音频三领域，Metric Gap 越低越好",
+    "rows": [
+      { "domain": "视觉", "dataset": "CIFAR-10", "ours": 0.0334, "onnx": 0.0661, "paconvert": 0.0680 },
+      { "domain": "视觉", "dataset": "CIFAR-100", "ours": 0.0335, "onnx": 0.0685, "paconvert": 0.0713 },
+      { "domain": "视觉", "dataset": "FashionMNIST", "ours": 0.0188, "onnx": 0.0490, "paconvert": 0.0374 },
+      { "domain": "文本", "dataset": "IMDB", "ours": 0.0261, "onnx": 0.0572, "paconvert": 0.0450 },
+      { "domain": "音频", "dataset": "UrbanSound8K", "ours": 0.0097, "onnx": 0.0380, "paconvert": 0.0321 }
+    ]
+  },
+  "generalization": [
+    { "direction": "PyTorch → TensorFlow", "total": 18, "success": 17, "rate": 94.4 },
+    { "direction": "PyTorch → MXNet", "total": 18, "success": 14, "rate": 78.0 }
+  ]
+}

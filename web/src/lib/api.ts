@@ -67,8 +67,36 @@ export interface MappingItem {
   unsupport_params: unknown[];
 }
 
+export interface ResultsData {
+  overview: {
+    analyzed_operators: number;
+    semantic_attention_ratio: number;
+    conversion_success_rate: number;
+    robustness_models: number;
+  };
+  inconsistency: { type: string; count: number; ratio: number; desc: string; example: string }[];
+  layer_distribution: { layer: string; ratio: number; note: string }[];
+  conversion: {
+    total: number;
+    success: number;
+    by_type: { type: string; sampled: number; succeeded: number; rate: number; mae: string; rmse: string }[];
+  };
+  model_comparison: {
+    note: string;
+    rows: { model: string; onnx: number | null; paconvert: number | null; ours: number | null; note: string }[];
+    latency_note: string;
+  };
+  llm_comparison: { name: string; passed: number; total: number; note: string }[];
+  robustness: {
+    note: string;
+    rows: { domain: string; dataset: string; ours: number; onnx: number; paconvert: number }[];
+  };
+  generalization: { direction: string; total: number; success: number; rate: number }[];
+}
+
 export const api = {
   stats: () => get<Stats>("/stats"),
+  results: () => get<ResultsData>("/results"),
   samples: () => get<{ samples: Sample[]; converter_available: boolean }>("/samples"),
   source: (id: string) => get<{ content: string; file: string }>(
     `/source?id=${encodeURIComponent(id)}`,

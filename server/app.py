@@ -103,6 +103,14 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/results")
+def results():
+    """实验评测数据（静态，随仓库发布）"""
+    import json
+    path = Path(__file__).resolve().parent / "results_data.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 @app.get("/api/stats")
 def stats():
     """首页统计卡片数据"""

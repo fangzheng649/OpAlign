@@ -1151,7 +1151,8 @@ def paddle_param_change(kwargs, params_change):
                 continue
 
             if k == "momentum":
-                new_kwargs[k] = "1.0 - " + new_kwargs.pop(k)
+                # momentum 语义取反：值可能是 float 而非 str，先强制格式化再拼接
+                new_kwargs[k] = "1.0 - {}".format(new_kwargs.pop(k))
                 continue
     return new_kwargs
 
@@ -1217,7 +1218,8 @@ def pytorch_param_change(kwargs, params_change):
                 continue
 
             if k == "momentum":
-                new_kwargs[k] = "1.0 - " + new_kwargs.pop(k)
+                # momentum 语义取反：值可能是 float 而非 str，先强制格式化再拼接
+                new_kwargs[k] = "1.0 - {}".format(new_kwargs.pop(k))
                 continue
 
     return new_kwargs

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Boxes,
   CheckCircle2,
@@ -37,6 +37,9 @@ export default function ConvertPage() {
   const [converting, setConverting] = useState(false);
   const [convertMsg, setConvertMsg] = useState("");
   const [converted, setConverted] = useState(false);
+  // 已尝试自动转换的示例（避免重复触发）
+  const attemptedRef = useRef<Set<string>>(new Set());
+  const convertingIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     api.samples().then((res) => {
@@ -79,7 +82,8 @@ export default function ConvertPage() {
 
   /** 发起真实转换（需后端具备 torch+paddle 环境） */
   const runRealConvert = async () => {
-    if (!selected || converting) return;
+    if (!selected || converting || convertingIdRef.current === selected.id) return;
+    convertingIdRef.current = selected.id;
     setConverting(true);
     setConverted(false);
     setConvertMsg("提交转换任务...");
@@ -97,9 +101,11 @@ export default function ConvertPage() {
           setConvertMsg("");
           setTab("diff");
           setConverting(false);
+          convertingIdRef.current = null;
         } else if (st.status === "failed") {
           setConvertMsg(`转换失败：${st.error || st.message || "未知错误"}`);
           setConverting(false);
+          convertingIdRef.current = null;
         } else {
           setConvertMsg(st.message || "转换执行中...");
           setTimeout(poll, 2000);
@@ -109,8 +115,23 @@ export default function ConvertPage() {
     } catch (e) {
       setConvertMsg(e instanceof Error ? e.message : "转换请求失败");
       setConverting(false);
+      convertingIdRef.current = null;
     }
   };
+
+  /** 无预置产物且环境可用时，选中即自动真实转换（每个示例仅自动触发一次） */
+  useEffect(() => {
+    if (
+      selected &&
+      !selected.has_target &&
+      converterAvailable &&
+      !attemptedRef.current.has(selected.id)
+    ) {
+      attemptedRef.current.add(selected.id);
+      runRealConvert();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, converterAvailable]);
 
   const { srcDiff, tgtDiff } = useMemo(() => {
     const a = new Map<number, "ins" | "del">();
@@ -177,6 +198,10 @@ export default function ConvertPage() {
                   {s.has_target ? (
                     <span className="ml-1.5 shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">
                       产物
+                    </span>
+                  ) : converterAvailable ? (
+                    <span className="ml-1.5 shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent-foreground">
+                      可转换
                     </span>
                   ) : (
                     <span className="ml-1.5 shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -249,7 +274,22 @@ export default function ConvertPage() {
               </div>
             )}
 
-            {!selected.has_target && !converted && (
+            {/* 无产物 + 环境可用：自动转换进行中 */}
+            {!selected.has_target && !converted && converterAvailable && converting && (
+              <div>
+                <div className="mb-3 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5 text-sm text-primary">
+                  <Loader2 size={14} className="animate-spin" />
+                  {convertMsg || "正在执行真实转换..."}
+                </div>
+                <div className="grid gap-3 xl:grid-cols-2">
+                  <CodeView code={src} title={`源码 · ${selected.name}.py (PyTorch)`} />
+                  <div className="skeleton h-96 rounded-lg" />
+                </div>
+              </div>
+            )}
+
+            {/* 无产物 + 环境不可用：演示模式说明 */}
+            {!selected.has_target && !converted && !converterAvailable && (
               <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
                 该示例暂无预置转换产物（演示模式）。安装 PyTorch 与 PaddlePaddle
                 后可通过后端 <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">POST /api/convert</code> 执行真实转换，

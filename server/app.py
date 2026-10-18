@@ -166,8 +166,13 @@ def source_file(id: str, file: Optional[str] = None):
     src_dir = MODELS_DIR / framework / domain / "sourceModels" / name
     path = src_dir / file if file else (src_dir if src_dir.is_dir() else src_dir.with_suffix(".py"))
     if path.is_dir():
-        files = sorted(p.name for p in path.glob("*.py"))
-        path = path / (files[0] if files else "__init__.py")
+        # 目录型示例：优先与目录同名的主模型文件，其次最大的非 __init__ 文件
+        files = sorted(p for p in path.glob("*.py"))
+        main = next((p for p in files if p.stem.startswith(name)), None)
+        if main is None:
+            non_init = [p for p in files if p.stem != "__init__"]
+            main = max(non_init or files, key=lambda p: p.stat().st_size)
+        path = main
     return {"content": _safe_read(path, MODELS_DIR), "file": path.name}
 
 
@@ -299,7 +304,11 @@ def convert(req: ConvertReq):
             with log_file.open("wb") as lf:
                 proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), stdout=lf, stderr=subprocess.STDOUT, timeout=1800)
             log_text = log_file.read_text(encoding="utf-8", errors="replace")
-            out_files = [p.name for p in sorted((work_dir / "out").rglob("*.py"))] if (work_dir / "out").is_dir() else []
+            out_root = work_dir / "out"
+            out_files = (
+                [str(p.relative_to(out_root)).replace("\\", "/") for p in sorted(out_root.rglob("*.py"))]
+                if out_root.is_dir() else []
+            )
             tasks[task_id].update(
                 status="completed" if proc.returncode == 0 else "failed",
                 message="转换完成" if proc.returncode == 0 else f"进程退出码 {proc.returncode}",
@@ -343,12 +352,20 @@ def task_diff(task_id: str):
         raise HTTPException(status_code=404, detail="任务不存在")
     if t.get("status") != "completed":
         raise HTTPException(status_code=400, detail="任务尚未完成")
-    out_files = [f for f in t.get("out_files", []) if not f.startswith("modified_")]
+    out_files = [f for f in t.get("out_files", []) if not Path(f).name.startswith("modified_")]
     if not out_files:
         raise HTTPException(status_code=404, detail="任务没有主产物文件")
-    src = source_file(t["sample_id"])["content"]
+    # 主产物优选：同名 > 前缀匹配 > 最大非 __init__ 文件
+    sample_name = (t.get("sample_id") or "").rsplit("/", 1)[-1]
     base = Path(t["out_dir"]) / "out"
-    tgt = _safe_read(base / out_files[0], base)
+    primary = next((f for f in out_files if Path(f).stem == sample_name), None)
+    if primary is None:
+        primary = next((f for f in out_files if Path(f).stem.startswith(sample_name)), None)
+    if primary is None:
+        candidates = [f for f in out_files if Path(f).stem != "__init__"] or out_files
+        primary = max(candidates, key=lambda f: (base / f).stat().st_size if (base / f).exists() else 0)
+    src = source_file(t["sample_id"])["content"]
+    tgt = _safe_read(base / primary, base)
     a, b = src.splitlines(), tgt.splitlines()
     sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
     ops = [
@@ -357,4 +374,4 @@ def task_diff(task_id: str):
         if tag != "equal"
     ]
     return {"ops": ops, "similarity": round(sm.ratio(), 4),
-            "src_lines": len(a), "tgt_lines": len(b), "file": out_files[0]}
+            "src_lines": len(a), "tgt_lines": len(b), "file": primary}

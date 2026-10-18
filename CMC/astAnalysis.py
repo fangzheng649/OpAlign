@@ -457,11 +457,10 @@ class astBasicNodes(astBaseNodes):
                         return new_node
 
             source_api = "*" + source_api[source_api.rfind("."):]
+            # 注意：注解字符串用双引号包裹，且嵌入源框架名而非列表 repr，避免引号嵌套导致 SyntaxError
             annotate_node = ast.parse(
-                "'Class Method: {}, not convert, please check whether it is {}.Tensor.*/Optimizer.*/nn.Module.*, "
-                "and convert manually'".format(
-                    source_api, FrameworkPackage[self.sourceDLClass]
-                )
+                '"Class Method: {} not converted; please check whether it is a {} Tensor/Optimizer/nn.Module '
+                'method and convert manually"'.format(source_api, self.sourceDLClass)
             ).body[0]
             self.record_scope(self.scope_body_index(), annotate_node)
             if source_api in self.unsupport_api_map:
